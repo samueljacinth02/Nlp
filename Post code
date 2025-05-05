@@ -1,0 +1,558 @@
+Module 1
+!kaggle datasets download -d kazanova/sentiment140 -p /content
+
+!unzip -q /content/sentiment140.zip -d /content
+
+import pandas as pd
+df1 = pd.read_csv('/content/training.1600000.processed.noemoticon.csv', encoding='latin-1',
+header=None)
+
+df1.head()
+
+# 0 = negative, 4 = positive
+
+df1[0].value_counts()
+
+df1.columns
+
+df1.shape
+
+df1.duplicated().sum()
+
+# renameing columns
+data = df1[[5, 0]]
+data.rename(columns={5: 'text', 0: 'label'}, inplace=True)
+data.head()
+
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+
+text = " ".join(review for review in data.text.astype(str))
+wordcloud = WordCloud(width=800, height=400).generate(text)
+
+plt.figure(figsize=(10, 5))
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.axis('off')
+plt.show()
+
+# bar graph most common words in text
+
+import matplotlib.pyplot as plt
+from collections import Counter
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import nltk
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('punkt_tab')
+
+all_text = ' '.join(data['text'].astype(str).tolist())
+
+tokens = word_tokenize(all_text.lower())
+
+stop_words = set(stopwords.words('english'))
+filtered_tokens = [w for w in tokens if not w in stop_words and w.isalnum()]
+
+word_counts = Counter(filtered_tokens)
+
+most_common_words = word_counts.most_common(20)
+
+words, counts = zip(*most_common_words)
+
+plt.figure(figsize=(10, 6))
+
+plt.bar(words, counts)
+plt.xlabel('Words')
+plt.ylabel('Frequency')
+plt.title('Most Common Words')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+from collections import Counter
+import matplotlib.pyplot as plt
+from nltk import ngrams
+import nltk
+nltk.download('punkt')
+
+text = ' '.join(data['text'].astype(str).tolist())
+n = 2 # For bigrams
+tokens = nltk.word_tokenize(text)
+bigrams = list(ngrams(tokens, n))
+most_common_bigrams = Counter(bigrams).most_common(10)
+
+bigram_labels, counts = zip(*[(' '.join(bigram), count) for bigram, count in most_common_bigrams])
+
+plt.bar(bigram_labels, counts)
+plt.xticks(rotation=45)
+plt.title(f'Most Common {n}-grams')
+plt.xlabel('Bigrams')
+plt.ylabel('Frequency')
+plt.show()
+
+from sklearn.preprocessing import LabelEncoder
+
+le = LabelEncoder()
+
+le.fit(data['label'])
+
+data['label'] = le.transform(data['label'])
+
+print(dict(zip(le.classes_, le.transform(le.classes_))))
+
+data['label'].value_counts()
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+#save as csv file for bert tokenization and bert training
+data.to_csv('/content/drive/MyDrive/projects/Environmental Posts/M1/Env_post_dataset.csv',
+index=False)
+Module 2:
+
+import pandas as pd
+data = pd.read_csv('/content/drive/MyDrive/projects/Environmental
+Posts/M1/Env_post_dataset.csv')
+data.head()
+
+data['label'].value_counts()
+
+!pip install imbalanced-learn
+
+import numpy as np
+import pandas as pd
+import torch
+from imblearn.over_sampling import SMOTE
+
+from transformers import AutoTokenizer, AutoModel
+
+df=data.copy()
+
+import pandas as pd
+from sklearn.utils import resample
+
+df_0 = df[df.label == 0]
+df_1 = df[df.label == 1]
+
+# Downsampling
+df_downsample_0 = resample(df_0,
+replace=False,
+n_samples=30000,
+random_state=42)
+
+df_downsample_1 = resample(df_1,
+replace=False,
+n_samples=30000,
+random_state=42)
+
+# Combining both
+df_downsampled = pd.concat([df_downsample_0, df_downsample_1])
+
+# Display new class counts
+df_downsampled.label.value_counts()
+
+import numpy as np
+import torch
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer,
+TrainingArguments
+from torch.utils.data import Dataset
+
+# training BERT Model
+
+# Step 1: Load your dataset
+data = df_downsampled.copy()
+
+# Step 2: Split the dataset into features and labels
+X = data['text'] # Assuming df_downsampled_0 has columns 'text' and 'label'
+y = data['label']
+
+# Step 3: Tokenize and encode the text data using BERT/RoBERTa
+model_name = "bert-base-uncased" # You can also use "roberta-base"
+tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+
+# Convert the Pandas Series to a list of strings
+# and remove any None values in the list
+X_list = X.astype(str).tolist()
+X_list = [x for x in X_list if x is not None]
+
+# Tokenizing the text data
+X_encoded = tokenizer(X_list, padding=True, truncation=True, return_tensors="pt")
+
+# Step 4: Create attention masks for the input
+attention_masks_resampled = np.array([
+[1] * len(x) + [0] * (X_encoded['input_ids'].shape[1] - len(x))
+for x in X_encoded['input_ids'].numpy()
+])
+
+# Convert the tensors back to PyTorch tensors
+input_ids = torch.tensor(X_encoded['input_ids'].numpy())
+attention_masks = torch.tensor(attention_masks_resampled)
+labels = torch.tensor(y.values)
+
+# Step 5: Create a custom dataset class
+class CustomDataset(Dataset):
+def __init__(self, input_ids, attention_masks, labels):
+self.input_ids = input_ids
+self.attention_masks = attention_masks
+self.labels = labels
+
+def __len__(self):
+return len(self.labels)
+
+def __getitem__(self, idx):
+return {
+'input_ids': self.input_ids[idx],
+'attention_mask': self.attention_masks[idx],
+'labels': self.labels[idx]
+}
+
+# Create dataset instances
+full_dataset = CustomDataset(input_ids, attention_masks, labels)
+
+# Split the dataset into training and validation sets
+train_size = int(0.8 * len(full_dataset))
+val_size = len(full_dataset) - train_size
+train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+
+import pandas as pd
+
+from transformers import BertTokenizer
+import torch
+from transformers import BertForSequenceClassification, Trainer, TrainingArguments
+from transformers.integrations import TensorBoardCallback
+from sklearn.metrics import accuracy_score
+# Load the pre-trained BERT model
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+
+# Set training arguments
+training_args = TrainingArguments(
+output_dir='./results', # Output directory
+num_train_epochs=4, # Number of training epochs
+per_device_train_batch_size=128, # Batch size for training
+per_device_eval_batch_size=128, # Batch size for evaluation
+warmup_steps=500, # Number of warmup steps for learning rate scheduler
+weight_decay=0.01, # Strength of weight decay
+logging_dir='./logs', # Directory for storing logs
+logging_steps=10,
+evaluation_strategy="epoch", # Evaluation strategy
+fp16=True,
+learning_rate= 4e-5,
+report_to="none",
+)
+
+def compute_metrics(pred):
+labels = pred.label_ids
+preds = pred.predictions.argmax(-1)
+acc = accuracy_score(labels, preds)
+return {
+'accuracy': acc,
+}
+
+trainer = Trainer(
+model=model, # The instantiated Transformers model to be trained
+args=training_args, # Training arguments, defined above
+train_dataset=train_dataset, # Training dataset
+eval_dataset=val_dataset, # Evaluation dataset
+compute_metrics=compute_metrics,
+callbacks=[TensorBoardCallback()]
+)
+
+trainer.train()
+
+# Evaluate the model
+eval_results = trainer.evaluate()
+print("Final Evaluation Results:", eval_results)
+
+# confusion matrix
+
+import numpy as np
+from sklearn.metrics import confusion_matrix
+
+# Get predictions for the validation set
+predictions = trainer.predict(val_dataset)
+
+# Extract predicted labels and true labels
+predicted_labels = np.argmax(predictions.predictions, axis=1)
+true_labels = predictions.label_ids
+
+# Calculate the confusion matrix
+cm = confusion_matrix(true_labels, predicted_labels)
+
+print("Confusion Matrix:")
+print(cm)
+
+# prompt: make a visual repres of confusion matrix
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Assuming 'cm' is your confusion matrix from the previous code
+
+# Create a heatmap of the confusion matrix
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+xticklabels=['Predicted 0', 'Predicted 1'],
+yticklabels=['Actual 0', 'Actual 1'])
+plt.xlabel('Predicted Labels')
+plt.ylabel('True Labels')
+plt.title('Confusion Matrix')
+plt.show()
+
+# classification report
+
+from sklearn.metrics import classification_report
+
+predictions = trainer.predict(val_dataset)
+
+predicted_labels = np.argmax(predictions.predictions, axis=1)
+
+true_labels = predictions.label_ids
+
+report = classification_report(true_labels, predicted_labels)
+
+print(report)
+
+# save model in drive
+
+model.save_pretrained('/content/drive/MyDrive/projects/Environmental Posts/tokenizer')
+tokenizer.save_pretrained('/content/drive/MyDrive/projects/Environmental Posts/tokenizer')
+
+# Save the model
+trainer.save_model("/content/drive/MyDrive/projects/Environmental Posts/modelfile")
+
+#Real time Prediction
+
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import torch
+
+# Load the saved model and tokenizer
+model =
+AutoModelForSequenceClassification.from_pretrained('/content/drive/MyDrive/projects/Environm
+ental Posts/modelfile')
+tokenizer = AutoTokenizer.from_pretrained('/content/drive/MyDrive/projects/Environmental
+Posts/tokenizer')
+
+# real time prediction model
+
+def predict_sentiment(text, model, tokenizer):
+inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt")
+outputs = model(**inputs)
+logits = outputs.logits
+probabilities = torch.softmax(logits, dim=1)
+predicted_label = torch.argmax(probabilities, dim=1).item()
+probability = probabilities[0][predicted_label].item()
+
+return {"label": predicted_label, "probability": probability}
+
+for i in range(5):
+text = data[data['label'] == 0]['text'].iloc[i]
+print(f"Text {i+1}: {text}")
+
+text_to_predict ='''
+@switchfoot http://twitpic.com/2y1zl - Awww, that's a bummer. You shoulda got David Carr of
+Third Day to do it. ;D
+'''
+prediction = predict_sentiment(text_to_predict, model, tokenizer)
+print(f"Prediction: {prediction}")
+
+text_to_predict ='''
+is upset that he can't update his Facebook by texting it... and might cry as a result School today also.
+Blah!
+'''
+prediction = predict_sentiment(text_to_predict, model, tokenizer)
+print(f"Prediction: {prediction}")
+
+for i in range(5):
+text = data[data['label'] == 1]['text'].iloc[i]
+print(f"Text {i+1}: {text}")
+
+text_to_predict ='''
+I LOVE @Health4UandPets u guys r the best!!
+'''
+prediction = predict_sentiment(text_to_predict, model, tokenizer)
+print(f"Prediction: {prediction}")
+
+text_to_predict ='''
+
+im meeting up with one of my besties tonight! Cant wait!! - GIRL TALK!!
+'''
+prediction = predict_sentiment(text_to_predict, model, tokenizer)
+print(f"Prediction: {prediction}")
+Module 3:
+
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+import sqlite3
+from flask_wtf import FlaskForm
+from wtforms import StringField, EmailField, PasswordField, SubmitField
+from wtforms.validators import DataRequired, Email
+from werkzeug.security import generate_password_hash, check_password_hash
+import os
+import email_validator
+from flask import Flask, request, render_template
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import torch
+
+from functools import wraps
+from flask import redirect, url_for
+
+app = Flask(__name__)
+app.secret_key = os.urandom(24).hex() # Use a random secret key
+
+def init_db():
+with sqlite3.connect('users.db') as conn:
+print('con sucss')
+cursor = conn.cursor()
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+name TEXT NOT NULL,
+username TEXT UNIQUE NOT NULL,
+password TEXT NOT NULL
+)
+''')
+conn.commit()
+
+init_db()
+
+class SignInForm(FlaskForm):
+email = EmailField('Email', validators=[DataRequired(), Email()])
+password = PasswordField('Password', validators=[DataRequired()])
+submit = SubmitField('Sign In')
+
+class SignUpForm(FlaskForm):
+name = StringField('Name', validators=[DataRequired()])
+email = EmailField('Email', validators=[DataRequired(), Email()])
+password = PasswordField('Password', validators=[DataRequired()])
+submit = SubmitField('Sign Up')
+
+@app.route("/")
+def home():
+return render_template("home.html")
+
+@app.route("/signin", methods=['GET', 'POST'])
+def signin():
+form = SignInForm()
+if form.validate_on_submit():
+email = form.email.data
+password = form.password.data
+
+with sqlite3.connect('users.db') as conn:
+cursor = conn.cursor()
+cursor.execute('SELECT password FROM users WHERE username = ?', (email,))
+user = cursor.fetchone()
+if user and check_password_hash(user[0], password):
+session['user'] = email
+flash('Successfully signed in!', 'success')
+return redirect(url_for('recomendation'))
+else:
+flash('Invalid credentials, please try again.', 'danger')
+
+return render_template("signin.html", form=form)
+
+@app.route("/signup", methods=['GET', 'POST'])
+def signup():
+form = SignUpForm()
+if form.validate_on_submit():
+name = form.name.data
+email = form.email.data
+password = form.password.data
+hashed_password = generate_password_hash(password)
+print(email)
+print(hashed_password)
+
+with sqlite3.connect('users.db') as conn:
+cursor = conn.cursor()
+try:
+cursor.execute('''
+INSERT INTO users (name, username, password)
+VALUES (?, ?, ?)
+''', (name, email, hashed_password))
+
+conn.commit()
+flash('Account created successfully!', 'success')
+return redirect(url_for('signin'))
+except sqlite3.IntegrityError:
+flash('Username already exists!', 'danger')
+
+return render_template("signup.html", form=form)
+
+def signin_required(f):
+@wraps(f)
+def decorated_function(*args, **kwargs):
+if 'user' not in session:
+flash('You need to sign in first!', 'warning')
+return redirect(url_for('signin'))
+return f(*args, **kwargs)
+return decorated_function
+
+# Load the tokenizer and model
+tokenizer =
+AutoModelForSequenceClassification.from_pretrained('E:/Working/Environment_Post/M3/bert_mo
+del')
+model = AutoTokenizer.from_pretrained('E:/Working/Environment_Post/M3/bert_model')
+#model.eval() # Set the model to evaluation mode
+
+# Class mapping
+class_labels = {
+0: "negative",
+1: "positive"
+}
+
+# Load the tokenizer and model correctly
+tokenizer = AutoTokenizer.from_pretrained('E:/Working/Environment_Post/M3/bert_model')
+model =
+AutoModelForSequenceClassification.from_pretrained('E:/Working/Environment_Post/M3/bert_mo
+del')
+model.eval() # Set the model to evaluation mode
+
+# Class mapping
+class_labels = {
+0: "negative",
+1: "positive"
+}
+
+@app.route("/prediction/", methods=['GET', 'POST'])
+@signin_required
+def recomendation():
+if request.method == 'POST':
+# Get the input text from the form
+text = request.form.get('text', '')
+
+# Preprocess the input with the tokenizer
+inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt")
+
+# Make prediction
+with torch.no_grad():
+outputs = model(**inputs) # Pass the processed inputs to the model
+
+logits = outputs.logits
+
+# Get predicted class and probabilities
+probabilities = torch.softmax(logits, dim=1)
+predicted_class = torch.argmax(probabilities, dim=1).item()
+
+# Map predicted class to label
+predicted_label = class_labels.get(predicted_class, "Unknown")
+
+# Round the probability to 4 decimal places
+probability = round(probabilities[0][predicted_class].item(), 4)
+
+# Return the result in the template
+return render_template("prediction.html", predicted_label=predicted_label, text=text,
+probability=probability)
+
+# Render the form for GET request
+return render_template("prediction.html")
+
+@app.route("/signout")
+def signout():
+session.pop('user', None)
+flash('You have been signed out.', 'info')
+return redirect(url_for('home'))
+
+if __name__ == "__main__":
+app.run(debug=True)
